@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit and local secrets
+.streamlit/secrets.toml
+.env
+.env.*
+
+# D-PRIME operational and company data
+data_input/
+archive/
+external_input/
+model_monitoring/
+master_data/
+output/
+outputs/
+
+# Operational workbooks and exports
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+
+# Local IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+~$*
+
