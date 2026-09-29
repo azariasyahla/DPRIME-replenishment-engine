@@ -930,7 +930,7 @@ div.stButton > button:disabled p {
 # HEADER AND LOGOS
 with st.container(border=True):
     logo_col, hero_col, partner_col = st.columns(
-        [1.5, 3.6, 1.2],
+        [1.5, 3.4, 1.1],
         vertical_alignment="center",
     )
 
@@ -959,7 +959,7 @@ with st.container(border=True):
         if not partner_logo.exists():
             partner_logo = BASE_DIR / "traknus_logo.png"
         if partner_logo.exists():
-            st.image(partner_logo, width=145)
+            st.image(partner_logo, width="stretch")
 
 
 # INTERNAL DATA INPUT
