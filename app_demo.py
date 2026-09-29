@@ -959,7 +959,7 @@ with st.container(border=True):
         if not partner_logo.exists():
             partner_logo = BASE_DIR / "traknus_logo.png"
         if partner_logo.exists():
-            st.image(partner_logo, width="180")
+            st.image(partner_logo, width="stretch")
 
 
 # INTERNAL DATA INPUT
