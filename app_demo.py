@@ -700,10 +700,10 @@ st.markdown(
         }
 
         .hero {
-            padding: 26px 30px;
+            padding: 18px 22px;
             border-radius: 24px;
             color: white;
-            margin-bottom: 24px;
+            margin-bottom: 0px;
             text-align: center;
 
             background:
@@ -727,10 +727,10 @@ st.markdown(
         }
 
         .hero-title {
-            font-size: 28px;
+            font-size: 24px;
             font-weight: 800;
             line-height: 1.2;
-            margin-bottom: 16px;
+            margin-bottom: 8px;
         }
 
         .dprime-name {
