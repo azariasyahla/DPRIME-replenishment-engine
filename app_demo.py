@@ -921,6 +921,16 @@ div.stButton > button:disabled p {
             color: #ef2029 !important;
             transform: translateY(-1px);
         }
+        /* Biar ujung logo tidak terpotong oleh sudut membulat */
+        [data-testid="stImage"] {
+            overflow: visible !important;
+        }
+        
+        [data-testid="stImage"] img {
+            border-radius: 0 !important;
+            object-fit: contain !important;
+        }
+        
     </style>
     """,
     unsafe_allow_html=True,
