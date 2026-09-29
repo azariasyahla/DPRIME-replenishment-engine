@@ -957,11 +957,6 @@ with partner_col:
     if partner_logo.exists():
         st.image(partner_logo, width="stretch")
 
-st.info(
-    "Public demo: use synthetic or approved sample files only. "
-    "Uploaded files on Community Cloud are not durable storage."
-)
-
 
 # INTERNAL DATA INPUT
 
