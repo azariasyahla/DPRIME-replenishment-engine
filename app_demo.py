@@ -940,7 +940,18 @@ div.stButton > button:disabled p {
             background: #fff9cc;
             color: #243047 !important;
         }
-        
+        /* Keep text readable on D-PRIME's light background */
+        .stApp [data-testid="stWidgetLabel"] *,
+        .stApp [data-testid="stMetricLabel"] *,
+        .stApp [data-testid="stRadio"] label *,
+        .stApp [data-testid="stAlert"] *,
+        .stApp [data-baseweb="tab"] *,
+        .stApp [data-testid="stMarkdownContainer"] h1,
+        .stApp [data-testid="stMarkdownContainer"] h2,
+        .stApp [data-testid="stMarkdownContainer"] h3,
+        .stApp [data-testid="stMarkdownContainer"] h4 {
+            color: #17205e !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
