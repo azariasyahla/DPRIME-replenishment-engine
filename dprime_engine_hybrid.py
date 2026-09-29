@@ -26,8 +26,8 @@ try:
     from xgboost import XGBRegressor
 except ImportError as exc:  # pragma: no cover - depends on local environment
     raise ImportError(
-        "D-PRIME Hybrid requires the xgboost package. "
-        "Run: python -m pip install xgboost"
+        "D-PRIME Hybrid membutuhkan package xgboost. "
+        "Jalankan: python -m pip install xgboost"
     ) from exc
 
 from dprime_engine import (
@@ -188,7 +188,7 @@ def _prepare_seasonality(seasonal_data: pd.DataFrame | None) -> pd.DataFrame:
     """Normalize compact monthly trend history used for causal seasonal indices."""
     if seasonal_data is None or seasonal_data.empty:
         raise ValueError(
-            "Historical seasonality is unavailable. Upload Trend Parts first."
+            "Historical seasonality belum tersedia. Upload Trend Parts terlebih dahulu."
         )
     seasonal = seasonal_data.copy()
     required = {"Date", "Seasonal_Qty"}
@@ -373,7 +373,7 @@ def _fit_predict_ml(
     train: pd.DataFrame,
     target: pd.DataFrame,
     config: HybridConfig,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     rf = RandomForestRegressor(
         n_estimators=config.rf_n_estimators,
         max_depth=config.rf_max_depth,
@@ -384,6 +384,22 @@ def _fit_predict_ml(
     rf.fit(train[INTERNAL_FEATURES], train["Demand"])
     rf_prediction = np.maximum(rf.predict(target[INTERNAL_FEATURES]), 0)
 
+    # Use the same XGBoost configuration for the internal-only counterfactual.
+    # The difference from the external model therefore comes from the feature
+    # set, not from a different algorithm or hyperparameter configuration.
+    xgb_internal = XGBRegressor(
+        n_estimators=config.xgb_n_estimators,
+        max_depth=config.xgb_max_depth,
+        learning_rate=config.xgb_learning_rate,
+        objective="reg:squarederror",
+        random_state=config.random_state,
+        n_jobs=-1,
+    )
+    xgb_internal.fit(train[INTERNAL_FEATURES], train["Demand"])
+    xgb_internal_prediction = np.maximum(
+        xgb_internal.predict(target[INTERNAL_FEATURES]), 0
+    )
+
     if train[EXTERNAL_FEATURES].isna().any().any():
         raise ValueError("Hybrid training data contains missing calendar/PMI features")
     if target[EXTERNAL_FEATURES].isna().any().any():
@@ -391,7 +407,7 @@ def _fit_predict_ml(
             target[EXTERNAL_FEATURES].isna().any(axis=1), "Date"
         ].dt.strftime("%Y-%m").unique()
         raise ValueError(
-            "Previous-month PMI is unavailable for target: "
+            "PMI bulan sebelumnya belum tersedia untuk target: "
             + ", ".join(dates)
         )
     xgb = XGBRegressor(
@@ -404,7 +420,7 @@ def _fit_predict_ml(
     )
     xgb.fit(train[EXTERNAL_FEATURES], train["Demand"])
     xgb_prediction = np.maximum(xgb.predict(target[EXTERNAL_FEATURES]), 0)
-    return rf_prediction, xgb_prediction
+    return rf_prediction, xgb_internal_prediction, xgb_prediction
 
 
 def _tsb_predictions(
@@ -446,11 +462,14 @@ def forecast_hybrid_for_month(
     if train.empty or target.empty:
         raise ValueError(f"Insufficient modeling rows for target {target_date:%Y-%m}")
 
-    rf_prediction, xgb_prediction = _fit_predict_ml(train, target, config)
+    rf_prediction, xgb_internal_prediction, xgb_prediction = _fit_predict_ml(
+        train, target, config
+    )
     output = target[
         ["Part Number", "Demand Pattern", "Demand"]
     ].rename(columns={"Demand": "Actual"})
     output["RF_Prediction"] = rf_prediction
+    output["Internal_XGB_Prediction"] = xgb_internal_prediction
     output["XGB_Prediction"] = xgb_prediction
     output = output.merge(
         _tsb_predictions(model_data, target_date, config),
@@ -471,6 +490,21 @@ def forecast_hybrid_for_month(
             output["XGB_Prediction"],
         ],
         default=np.nan,
+    )
+    external_applied = output["Selected_Model"].eq("XGBoost")
+    output["Internal_Forecast"] = np.where(
+        external_applied,
+        output["Internal_XGB_Prediction"],
+        output["Hybrid_Prediction"],
+    )
+    output["External_Forecast"] = output["Hybrid_Prediction"]
+    output["External_Impact_Units"] = (
+        output["External_Forecast"] - output["Internal_Forecast"]
+    )
+    output["External_Impact_Pct"] = np.where(
+        output["Internal_Forecast"].gt(0),
+        output["External_Impact_Units"] / output["Internal_Forecast"] * 100,
+        np.nan,
     )
     output.insert(0, "Date", target_date)
     return output.reset_index(drop=True)
@@ -546,7 +580,10 @@ def _recalculate_replenishment(
         np.nan,
     )
     result["Decision"] = np.select(
-        [result["Stock_On_Hand"].isna(), result["Suggested_Order"].gt(0)],
+        [
+            result["Total_Stock_On_Hand_All_Plant"].isna(),
+            result["Suggested_Order"].gt(0),
+        ],
         ["REVIEW REQUIRED", "ORDER"],
         default="NO ORDER",
     )
@@ -561,9 +598,9 @@ def _recalculate_replenishment(
         [result["Decision"].eq("ORDER"), result["Decision"].eq("NO ORDER")],
         [
             "Lakukan replenishment hingga mendekati Max Stock",
-            "No order is required because Inventory Position remains above Min Stock",
+            "Belum perlu order karena Inventory Position masih di atas Min Stock",
         ],
-        default="Verify Stock On Hand before confirming the replenishment decision",
+        default="Verifikasi Stock On Hand sebelum menentukan keputusan replenishment",
     )
     return result
 
@@ -589,7 +626,15 @@ def run_dprime_hybrid(
     ) + pd.DateOffset(months=1)
     forecast = forecast_hybrid_for_month(model_data, target_date, config)
     selected = forecast[
-        ["Part Number", "Hybrid_Prediction", "Selected_Model"]
+        [
+            "Part Number",
+            "Hybrid_Prediction",
+            "Selected_Model",
+            "Internal_Forecast",
+            "External_Forecast",
+            "External_Impact_Units",
+            "External_Impact_Pct",
+        ]
     ].rename(
         columns={
             "Hybrid_Prediction": "Hybrid_Forecast_Demand",
@@ -606,7 +651,13 @@ def run_dprime_hybrid(
 
     ordered = list(baseline.columns)
     forecast_position = ordered.index("Forecast_Demand") + 1
-    ordered.insert(forecast_position, "Forecast_Model")
+    ordered[forecast_position:forecast_position] = [
+        "Forecast_Model",
+        "Internal_Forecast",
+        "External_Forecast",
+        "External_Impact_Units",
+        "External_Impact_Pct",
+    ]
     return output[ordered].reset_index(drop=True)
 
 

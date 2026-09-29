@@ -22,16 +22,20 @@ from dprime_engine_hybrid import (
     run_dprime_hybrid,
 )
 
+STOCK_DISPLAY_NAMES = {
+    "HDO_Stock": "HDO Stock",
+    "Other_Stock_Without_HDO": "Other Stock (Without HDO)",
+    "Total_Stock_On_Hand_All_Plant": "Total Stock On Hand (All Plant)",
+}
+
 
 def load_part_master():
-    """Load optional SAP/EPC attributes from the local machine.
-
-    Operational master data is intentionally excluded from source control.
-    The application therefore remains usable when the file is unavailable.
-    """
+    """Load static SAP/EPC attributes bundled with the application."""
     master_path = BASE_DIR / "master_data" / "master_part.xlsx"
     if not master_path.exists():
-        return None
+        raise FileNotFoundError(
+            "Master part file not found: master_data/master_part.xlsx"
+        )
     master = pd.read_excel(master_path, sheet_name="Part Master")
     master.columns = [str(column).strip() for column in master.columns]
     master["PN"] = master["PN"].astype("string").str.strip()
@@ -41,12 +45,19 @@ def load_part_master():
 def build_operational_output(master, dprime):
     """Keep every original D-PRIME column and append SAP/EPC attributes."""
     original_dprime_columns = list(dprime.columns)
-    output = dprime.copy()
+    # Retain these diagnostic fields inside the engine, but keep the user-facing
+    # recommendation table and its Excel export focused on the final forecast.
+    hidden_diagnostic_columns = [
+        "Forecast_Model",
+        "Internal_Forecast",
+        "External_Forecast",
+        "External_Impact_Units",
+        "External_Impact_Pct",
+        "Lead_Time_Days",
+        "Lead_Time_Source",
+    ]
+    output = dprime.drop(columns=hidden_diagnostic_columns, errors="ignore").copy()
     output["Part Number"] = output["Part Number"].astype("string").str.strip()
-
-    if master is None or master.empty:
-        output["Master Data Status"] = "MASTER DATA NOT CONFIGURED"
-        return output
 
     master_for_merge = master.copy().rename(columns={"PN": "Part Number"})
     master_for_merge["Part Number"] = (
@@ -59,26 +70,39 @@ def build_operational_output(master, dprime):
         validate="one_to_one",
     )
 
-    output["Master Data Status"] = output["Model Unit"].notna().map(
-        {True: "MATCHED", False: "PN NOT FOUND IN MASTER"}
-    )
+    # Show one description: keep the D-PRIME value, using master data only
+    # when that value is missing or blank.
+    if "Description" in output.columns:
+        if "Part Description" in output.columns:
+            primary = output["Part Description"].astype("string")
+            primary = primary.mask(primary.str.strip().eq(""))
+            master_description = output["Description"].astype("string")
+            master_description = master_description.mask(
+                master_description.str.strip().eq("")
+            )
+            output["Part Description"] = primary.fillna(master_description)
+        else:
+            output["Part Description"] = output["Description"]
+        output = output.drop(columns="Description")
 
     master_columns = [
-        "Description", "Model Unit", "Qty Needed Per Unit", "Remarks",
-        "Besi Baja", "APEX", "FOB", "Master Data Status",
+        "Model Unit", "Qty Needed Per Unit", "Remarks",
+        "Besi Baja", "APEX", "FOB",
     ]
     master_columns = [column for column in master_columns if column in output]
 
-    # Part Number + Part Description, kemudian atribut master, lalu seluruh
-    # kolom D-PRIME lainnya dalam urutan asli tanpa rename atau penghapusan.
+    # Part Number + one description, then master attributes and D-PRIME output.
     leading = [
         column for column in ["Part Number", "Part Description"]
-        if column in original_dprime_columns
+        if column in output.columns
     ]
     dprime_remaining = [
-        column for column in original_dprime_columns if column not in leading
+        column for column in original_dprime_columns
+        if column not in leading and column in output.columns
     ]
-    return output[leading + master_columns + dprime_remaining]
+    return output[leading + master_columns + dprime_remaining].rename(
+        columns=STOCK_DISPLAY_NAMES
+    )
 
 
 def build_gforce_comparison(dprime_result, gforce_file):
@@ -182,8 +206,6 @@ def build_gforce_comparison(dprime_result, gforce_file):
         .drop(columns="_status_order")
         .reset_index(drop=True)
     )
-
-
 # BASIC CONFIGURATION
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -915,14 +937,10 @@ logo_col, hero_col, partner_col = st.columns(
 )
 
 with logo_col:
-    dprime_logo_path = BASE_DIR / "assets" / "dprime_logo.png"
-    if dprime_logo_path.exists():
-        st.image(dprime_logo_path, width="stretch")
-    else:
-        st.markdown(
-            '<div class="dprime-name" style="color:#18205d;">D-PRIME</div>',
-            unsafe_allow_html=True,
-        )
+    st.image(
+        BASE_DIR / "assets" / "dprime_logo.png",
+        width="stretch",
+    )
 
 with hero_col:
     st.markdown(
@@ -938,15 +956,10 @@ Demand Forecasting-Driven Predictive Replenishment<br>
     )
 
 with partner_col:
-    partner_logo_path = BASE_DIR / "assets" / "traknus_logo.png"
-    if partner_logo_path.exists():
-        st.image(partner_logo_path, width="stretch")
-    else:
-        st.markdown(
-            '<div style="text-align:center;color:#18205d;font-weight:800;">'
-            'TRAKTOR NUSANTARA</div>',
-            unsafe_allow_html=True,
-        )
+    st.image(
+        BASE_DIR / "assets" / "traknus_logo.png",
+        width="stretch",
+    )
 
 
 # INTERNAL DATA INPUT
@@ -1710,12 +1723,6 @@ if run_clicked:
             master_result = load_part_master()
             operational_result = build_operational_output(master_result, result)
 
-            if master_result is None:
-                st.warning(
-                    "Local Part Master is not configured. D-PRIME results are "
-                    "available, but optional SAP/EPC attributes were not appended."
-                )
-
             model_evaluation = None
             if run_mode == "Production":
                 # First evaluate the forecast previously made for the latest
@@ -1973,6 +1980,107 @@ if (
                 f"(MAE {REFERENCE_MAE:.4f}; RMSE {REFERENCE_RMSE:.4f}). "
                 "STABLE is within 10%; MONITOR is within 25%; values above "
                 "that are marked REVIEW MODEL."
+            )
+
+    impact_columns = {
+        "Internal_Forecast",
+        "External_Forecast",
+        "External_Impact_Units",
+        "External_Impact_Pct",
+        "Forecast_Model",
+    }
+    if impact_columns.issubset(result.columns):
+        st.markdown(
+            '<div class="section-title">🌐 External Factor Impact</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="section-copy">Compare the internal-demand forecast '
+            'with the forecast that includes seasonality, calendar events, '
+            'and lagged PMI. External features are currently applied only to '
+            'Erratic Part Numbers routed to XGBoost.</div>',
+            unsafe_allow_html=True,
+        )
+
+        external_impact = result[result["Forecast_Model"].eq("XGBoost")].copy()
+        if external_impact.empty:
+            st.info(
+                "No Erratic Part Numbers were routed to XGBoost in this run. "
+                "External impact is therefore zero for the current scope."
+            )
+        else:
+            impact_units = external_impact["External_Impact_Units"].fillna(0)
+            impact_metrics = [
+                ("Forecast Increased", int(impact_units.gt(0).sum())),
+                ("Net Forecast Impact", float(impact_units.sum())),
+            ]
+            for column, (label, value) in zip(
+                st.columns(2), impact_metrics
+            ):
+                formatted = (
+                    f"{value:+,.2f}" if label == "Net Forecast Impact"
+                    else f"{int(value):,}"
+                )
+                column.metric(label, formatted)
+
+            impact_table_columns = [
+                "Part Number",
+                "Part Description",
+                "Demand_Pattern",
+                "Forecast_Model",
+                "Internal_Forecast",
+                "External_Forecast",
+                "External_Impact_Units",
+                "External_Impact_Pct",
+            ]
+            impact_table_columns = [
+                column for column in impact_table_columns
+                if column in external_impact.columns
+            ]
+            impact_table = external_impact[impact_table_columns].copy()
+            impact_table["_Absolute_Impact"] = impact_table[
+                "External_Impact_Units"
+            ].abs()
+            impact_table = impact_table.sort_values(
+                "_Absolute_Impact", ascending=False
+            ).drop(columns="_Absolute_Impact")
+
+            top_external_impact = external_impact.assign(
+                _Absolute_Impact=impact_units.abs()
+            ).nlargest(15, "_Absolute_Impact")
+            st.markdown("#### Top 15 External Forecast Impacts")
+            st.bar_chart(
+                top_external_impact[
+                    ["Part Number", "External_Impact_Units"]
+                ],
+                x="Part Number",
+                y="External_Impact_Units",
+                width="stretch",
+            )
+
+            with st.expander("View external impact by Part Number", expanded=True):
+                st.dataframe(
+                    impact_table,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Internal_Forecast": st.column_config.NumberColumn(
+                            "Internal Forecast", format="%.2f"
+                        ),
+                        "External_Forecast": st.column_config.NumberColumn(
+                            "External Forecast", format="%.2f"
+                        ),
+                        "External_Impact_Units": st.column_config.NumberColumn(
+                            "Impact (Units)", format="%+.2f"
+                        ),
+                        "External_Impact_Pct": st.column_config.NumberColumn(
+                            "Impact (%)", format="%+.2f%%"
+                        ),
+                    },
+                )
+            st.caption(
+                "Impact shows model sensitivity, not proof that an external "
+                "factor caused the demand change. Currency is not included."
             )
 
     comparison = st.session_state.get("comparison_result")
@@ -2275,27 +2383,21 @@ if (
             index=False,
         )
 
-        result[
-            result["Decision"].eq("ORDER")
+        operational_result[
+            operational_result["Decision"].eq("ORDER")
         ].to_excel(
             writer,
-            sheet_name="DPrime Order Only",
+            sheet_name="Order Only",
             index=False,
         )
 
-        result[
-            result["Decision"].eq(
+        operational_result[
+            operational_result["Decision"].eq(
                 "REVIEW REQUIRED"
             )
         ].to_excel(
             writer,
             sheet_name="Review Required",
-            index=False,
-        )
-
-        result.to_excel(
-            writer,
-            sheet_name="DPrime Output",
             index=False,
         )
 

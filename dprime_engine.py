@@ -276,7 +276,7 @@ def run_dprime(inputs: Mapping[str, pd.DataFrame], config: DPrimeConfig | None =
     usage, stock, policy = inputs["usage"], inputs["stock"], inputs["policy"]
     watch, migo, backorder, wrs = inputs["watchlist"], inputs["migo"], inputs["backorder"], inputs["wrs"]
     usage = usage.rename(columns={"Part Number": "PN", "RANK Freq Call": "Rank", "Description": "Part Description"})
-    stock = stock.rename(columns={"Material": "PN", "Available stock": "Stock_On_Hand"})
+    stock = stock.rename(columns={"Material": "PN", "Available stock": "Available_Stock"})
     policy = policy.rename(columns={"Part Number": "PN", "Qty Min": "Policy_Min", "Qty Max": "Policy_Max"})
     watch = watch.rename(columns={"Part Number": "PN"})
     for df in (usage, stock, policy, watch, migo, backorder, wrs):
@@ -290,8 +290,37 @@ def run_dprime(inputs: Mapping[str, pd.DataFrame], config: DPrimeConfig | None =
     scope = watch[["PN"]].dropna().drop_duplicates().merge(usage, on="PN", how="left")
     scope = scope[scope["Rank"].notna() & scope.get("MAD", pd.Series(np.nan, index=scope.index)).notna()].copy()
 
-    stock["Stock_On_Hand"] = _numeric(stock["Stock_On_Hand"])
-    stock_sum = stock.groupby("PN", as_index=False)["Stock_On_Hand"].sum(min_count=1)
+    stock["Available_Stock"] = _numeric(stock["Available_Stock"])
+    stock["Plant"] = stock["Plant"].astype("string").str.strip().str.upper()
+
+    # Keep the plant-level stock composition visible while preserving the
+    # original replenishment basis: total available stock across all plants.
+    stock_total = (
+        stock.groupby("PN", as_index=False)["Available_Stock"]
+        .sum(min_count=1)
+        .rename(columns={"Available_Stock": "Total_Stock_On_Hand_All_Plant"})
+    )
+    hdo_stock = (
+        stock.loc[stock["Plant"].eq("HDO")]
+        .groupby("PN", as_index=False)["Available_Stock"]
+        .sum(min_count=1)
+        .rename(columns={"Available_Stock": "HDO_Stock"})
+    )
+    other_stock = (
+        stock.loc[stock["Plant"].ne("HDO") & stock["Plant"].notna()]
+        .groupby("PN", as_index=False)["Available_Stock"]
+        .sum(min_count=1)
+        .rename(columns={"Available_Stock": "Other_Stock_Without_HDO"})
+    )
+    stock_summary = stock_total.merge(hdo_stock, on="PN", how="left").merge(
+        other_stock, on="PN", how="left"
+    )
+    has_stock_data = stock_summary["Total_Stock_On_Hand_All_Plant"].notna()
+    stock_summary.loc[has_stock_data, ["HDO_Stock", "Other_Stock_Without_HDO"]] = (
+        stock_summary.loc[
+            has_stock_data, ["HDO_Stock", "Other_Stock_Without_HDO"]
+        ].fillna(0)
+    )
     policy_sum = policy[["PN", "Policy_Min", "Policy_Max"]].drop_duplicates("PN")
 
     def qty_summary(df: pd.DataFrame, value: str, output: str) -> pd.DataFrame:
@@ -299,7 +328,7 @@ def run_dprime(inputs: Mapping[str, pd.DataFrame], config: DPrimeConfig | None =
         temp[value] = _numeric(temp[value], 0)
         return temp.groupby("PN", as_index=False)[value].sum().rename(columns={value: output})
 
-    result = (scope.merge(stock_sum, on="PN", how="left")
+    result = (scope.merge(stock_summary, on="PN", how="left")
               .merge(policy_sum, on="PN", how="left")
               .merge(qty_summary(migo, "Qty. Supply", "Incoming_MIGO"), on="PN", how="left")
               .merge(qty_summary(wrs, "Qty. Order", "Incoming_WRS"), on="PN", how="left")
@@ -325,11 +354,11 @@ def run_dprime(inputs: Mapping[str, pd.DataFrame], config: DPrimeConfig | None =
     result["Safety_Stock"] = np.maximum(base_ss, lead_std.where(low_frequency, 0))
     result["Min_Stock"] = result["Lead_Time_Demand"] + result["Safety_Stock"]
     result["Max_Stock"] = result["Min_Stock"] + config.review_cycle_months * result["Forecast_Demand"]
-    result["Inventory_Position"] = result["Stock_On_Hand"] + result["Incoming_MIGO"] + result["Incoming_WRS"] + result["Backorder"]
+    result["Inventory_Position"] = result["Total_Stock_On_Hand_All_Plant"] + result["Incoming_MIGO"] + result["Incoming_WRS"] + result["Backorder"]
     requirement = np.where(result["Inventory_Position"] < result["Min_Stock"], result["Max_Stock"] - result["Inventory_Position"], 0)
     result["Suggested_Order"] = np.where(result["Inventory_Position"].notna(), np.ceil(np.maximum(requirement, 0)), np.nan)
     result["Decision"] = np.select(
-        [result["Stock_On_Hand"].isna(), result["Suggested_Order"].gt(0)],
+        [result["Total_Stock_On_Hand_All_Plant"].isna(), result["Suggested_Order"].gt(0)],
         ["REVIEW REQUIRED", "ORDER"], default="NO ORDER")
     result["Decision_Reason"] = np.select(
         [result["Decision"].eq("ORDER"), result["Decision"].eq("NO ORDER")],
@@ -339,11 +368,12 @@ def run_dprime(inputs: Mapping[str, pd.DataFrame], config: DPrimeConfig | None =
     result["Gap_to_Max"] = result["Max_Stock"] - result["Inventory_Position"]
     result["Action_Note"] = np.select(
         [result["Decision"].eq("ORDER"), result["Decision"].eq("NO ORDER")],
-        ["Replenish inventory toward Max Stock", "No order is required because Inventory Position remains above Min Stock"],
-        default="Verify Stock On Hand before confirming the replenishment decision")
+        ["Lakukan replenishment hingga mendekati Max Stock", "Belum perlu order karena Inventory Position masih di atas Min Stock"],
+        default="Verifikasi Stock On Hand sebelum menentukan keputusan replenishment")
     columns = ["PN", "Part Description", "Rank", "Demand_Pattern", "Forecast_Demand", "Lead_Time_Days",
                "Lead_Time_Source", "Lead_Time_Demand", "Demand_Std_12M", "Safety_Stock", "Min_Stock", "Max_Stock",
-               "Stock_On_Hand", "Incoming_MIGO", "Incoming_WRS", "Backorder", "Inventory_Position", "Suggested_Order",
+               "HDO_Stock", "Other_Stock_Without_HDO", "Total_Stock_On_Hand_All_Plant",
+               "Incoming_MIGO", "Incoming_WRS", "Backorder", "Inventory_Position", "Suggested_Order",
                "Decision", "Decision_Reason", "Gap_to_Min", "Gap_to_Max", "Action_Note"]
     return result[[c for c in columns if c in result]].rename(columns={"PN": "Part Number"}).reset_index(drop=True)
 
