@@ -931,6 +931,16 @@ div.stButton > button:disabled p {
             object-fit: contain !important;
         }
         
+        .file-status {
+            background: #fff0ed;
+            color: #243047 !important;
+        }
+        
+        .file-warning {
+            background: #fff9cc;
+            color: #243047 !important;
+        }
+        
     </style>
     """,
     unsafe_allow_html=True,
