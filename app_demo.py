@@ -928,34 +928,38 @@ div.stButton > button:disabled p {
 
 
 # HEADER AND LOGOS
-
-logo_col, hero_col, partner_col = st.columns(
-    [1.7, 3.8, 1.0],
-    vertical_alignment="center",
-)
-
-with logo_col:
-    dprime_logo = BASE_DIR / "assets" / "dprime_logo.png"
-    if dprime_logo.exists():
-        st.image(dprime_logo, width="stretch")
-
-with hero_col:
-    st.markdown(
-        """<div class="hero">
-<div class="hero-title">Weekly Replenishment Dashboard</div>
-<div class="dprime-name">D-PRIME</div>
-<div class="hero-copy">
-Demand Forecasting-Driven Predictive Replenishment<br>
-&amp; Inventory Management Engine
-</div>
-</div>""",
-        unsafe_allow_html=True,
+with st.container(border=True):
+    logo_col, hero_col, partner_col = st.columns(
+        [1.5, 3.6, 1.2],
+        vertical_alignment="center",
     )
 
-with partner_col:
-    partner_logo = BASE_DIR / "assets" / "traknus_logo.png"
-    if partner_logo.exists():
-        st.image(partner_logo, width="stretch")
+    with logo_col:
+        dprime_logo = BASE_DIR / "assets" / "dprime_logo.png"
+        if not dprime_logo.exists():
+            dprime_logo = BASE_DIR / "dprime_logo.png"
+        if dprime_logo.exists():
+            st.image(dprime_logo, width=260)
+
+    with hero_col:
+        st.markdown(
+            """<div class="hero">
+                <div class="hero-title">Weekly Replenishment Dashboard</div>
+                <div class="dprime-name">D-PRIME</div>
+                <div class="hero-copy">
+                    Demand Forecasting-Driven Predictive Replenishment
+                    &amp; Inventory Management Engine
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+    with partner_col:
+        partner_logo = BASE_DIR / "assets" / "traknus_logo.png"
+        if not partner_logo.exists():
+            partner_logo = BASE_DIR / "traknus_logo.png"
+        if partner_logo.exists():
+            st.image(partner_logo, width=145)
 
 
 # INTERNAL DATA INPUT
