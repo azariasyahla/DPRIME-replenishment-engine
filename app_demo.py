@@ -1048,7 +1048,7 @@ def render_internal_uploader(key):
     background = "#ecfdf3" if status["state"] == "current" else "#fff1f0"
     st.markdown(
         f"""<div style="border-left:4px solid {color};background:{background};
-        border-radius:10px;padding:9px 11px;margin-bottom:8px;font-size:12px;">
+        color:#243047;border-radius:10px;padding:9px 11px;margin-bottom:8px;font-size:12px;">
         <strong style="color:{color};">● {status['label']}</strong><br>
         <span><strong>Refresh:</strong> {info['cadence']}</span><br>
         <span><strong>Last updated:</strong> {status['last_updated']}</span><br>
@@ -1066,8 +1066,12 @@ def render_internal_uploader(key):
         ),
     )
     if status["warning"]:
-        st.warning(status["warning"], icon="⚠️")
-
+        st.markdown(
+            f'<div style="background:#fff9cc;color:#243047;'
+            f'border-radius:10px;padding:14px;margin-bottom:12px;">'
+             f'⚠️ {status["warning"]}</div>',
+            unsafe_allow_html=True,
+        )
 first_row_columns = st.columns(4)
 
 for column, key in zip(
